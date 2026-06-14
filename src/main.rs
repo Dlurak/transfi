@@ -1,9 +1,9 @@
 use clap::Parser;
 use local_ip_address::local_ip;
 use log::{error, info, warn};
+use maud::{DOCTYPE, html};
 use pathdiff::diff_paths;
 use std::{
-    fmt::Write,
     fs,
     io::{self, Cursor},
     path::PathBuf,
@@ -99,14 +99,16 @@ fn main() {
 
     for mut request in server.incoming_requests() {
         let method = request.method();
-        info!(
-            "{} - {} {}",
-            request.remote_addr().ip(),
-            method,
-            request.url()
-        );
+        let url = request.url();
+        let Ok(url) = urlencoding::decode(url) else {
+            let resp = Response::from_string("incorrectly encoded url").with_status_code(400);
+            let _ = request.respond(resp);
+            continue;
+        };
 
-        let rel_path = request.url().trim_start_matches('/');
+        info!("{} - {} {}", request.remote_addr().ip(), method, url,);
+
+        let rel_path = url.trim_start_matches('/');
         let path = args.directory.join(rel_path);
 
         #[cfg(feature = "upload")]
@@ -182,70 +184,63 @@ fn response(path: &PathBuf, base: &PathBuf, upload: bool) -> io::Result<Response
         let entries = fs::read_dir(path)?;
         let display_path =
             diff_paths(path, base).map_or_else(|| "?".to_string(), |p| p.display().to_string());
-        let mut body = if cfg!(feature = "upload") && upload {
-            format!(
-                "
-            <!DOCTYPE html>
-            <html>
-            <body>
-            <h1>Directory listing for <code>/{}</code></h1>
-            <form method='POST' enctype='multipart/form-data'>
-            <input type='file' name='file'>
-            <button type='submit'>Upload</button>
-            </form>
-            <hr>
-            <ul>
-            ",
-                display_path
-            )
-        } else {
-            format!(
-                "
-            <!DOCTYPE html>
-            <html>
-            <body>
-            <h1>Directory listing for <code>/{}</code></h1>
-            <hr>
-            <ul>
-            ",
-                display_path
-            )
-        };
-        for entry in entries {
-            let entry = entry?;
-            let mut href = entry.file_name().to_str().unwrap_or_default().to_string();
 
-            if entry.file_type()?.is_dir() {
-                href.push('/');
+        let body = html! {
+            (DOCTYPE)
+            html {
+                head {
+                    meta charset="utf-8";
+                    meta name="viewport" content="width=device-width, initial-scale=1";
+                    title { "Directory listing for " (display_path) };
+                }
+                body {
+                    h1 { "Directory listing for " code { (display_path) } };
+                    @if cfg!(feature = "upload") && upload {
+                        form method="POST" enctype="multipart/formdata" {
+                            input type="file" name="file" required;
+                            button type="submit" { "Upload" };
+                        };
+                    }
+                    hr;
+                    ul {
+                        @for entry in entries {
+                            @let entry = entry?;
+                            @let mut href = entry.file_name()
+                                .to_str()
+                                .unwrap_or_default()
+                                .to_string();
+
+                            @if entry.file_type()?.is_dir() {
+                                @let _ = href.push('/');
+                            }
+
+                            li { a href=(href) { (href) } }
+                        }
+                    }
+                }
             }
-
-            let _ = write!(body, "<li><a href='{href}'>{href}</a></li>");
-        }
-        let _ = body.write_str(
-            "
-            </ul>
-            <hr>
-            </body>
-            </html>
-            ",
-        );
+        };
 
         Ok(Response::from_string(body)
             .with_status_code(200)
             .with_header(html_header()))
     } else {
-        let body = format!(
-            "<!DOCTYPE html>
-            <html>
-            <body>
-            <h1>File or Directory not found</h1>
-            <p>Path: <code>{}</code></p>
-            </body>
-            </html>",
-            path.display()
-        );
+        let page = html! {
+            (DOCTYPE)
+            html {
+                head {
+                    meta charset="utf-8";
+                    meta name="viewport" content="width=device-width, initial-scale=1";
+                    title { "Fiel or directory not found" };
+                }
+                body {
+                    h1 { "File or Directory not found" };
+                    p { "Path: " code { (path.display()) } };
+                }
+            }
+        };
 
-        Ok(Response::from_string(body)
+        Ok(Response::from_string(page)
             .with_status_code(404)
             .with_header(html_header()))
     }
@@ -253,16 +248,20 @@ fn response(path: &PathBuf, base: &PathBuf, upload: bool) -> io::Result<Response
 
 fn error_response(e: std::io::Error, path: PathBuf) -> Response<Cursor<Vec<u8>>> {
     let path = path.display();
-    let body = format!(
-        "<html>
-        <body>
-        <h1>Error</h1>
-        <p>Could not read path: {}</p>
-        <p>Path: <code>{}</code></p>
-        </body>
-        </html>",
-        e, path
-    );
+    let body = html! {
+        (DOCTYPE)
+        html {
+            head {
+                meta charset="utf-8";
+                title { "Error" };
+            }
+            body {
+                h1 { "Error" };
+                p { "Could not read path: " (e) }
+                p { "Path: " code { (path) } }
+            }
+        }
+    };
     error!("Could not handle request: Path: {path}");
 
     Response::from_string(body)
