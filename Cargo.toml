@@ -1,0 +1,20 @@
+[package]
+name = "transfi"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+clap = { version = "4.6.1", features = ["derive"] }
+env_logger = "0.11.10"
+local-ip-address = "0.6.13"
+log = "0.4.32"
+mime_guess = "2.0.5"
+pathdiff = "0.2.3"
+tiny_http = "0.6.4" # This old version because of multipart
+qrcode = { version = "0.14.1", optional = true }
+multipart = { version = "0.18.0", optional = true, default-features = false, features = ["server", "tiny_http"] } # TODO: use a more modern crate which also works *truly* generic or with tiny_http 0.12.0
+
+[features]
+default = ["qrcode", "upload"]
+qrcode-feature = ["qrcode"]
+upload = ["multipart"]
